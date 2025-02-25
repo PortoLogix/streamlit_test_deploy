@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import os
+from dotenv import load_dotenv
+import alpaca_trade_api as tradeapi
+import logging
 
 def check_password():
     """Returns `True` if the user had the correct password."""
@@ -38,6 +42,10 @@ def check_password():
         # Password correct.
         return True
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 st.set_page_config(
     page_title="QuantLogix",
     page_icon="📈",
@@ -47,166 +55,206 @@ st.set_page_config(
 if check_password():
     st.title("QuantLogix Dashboard")
     
-    # Generate sample data
-    dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
-    np.random.seed(42)  # For reproducible results
-    
-    # Generate realistic looking portfolio values
-    initial_value = 100000
-    daily_returns = np.random.normal(loc=0.0001, scale=0.02, size=len(dates))
-    portfolio_values = initial_value * (1 + daily_returns).cumprod()
-    
-    # Calculate P&L metrics
-    current_value = portfolio_values[-1]
-    daily_change = portfolio_values[-1] - portfolio_values[-2]
-    daily_change_pct = (daily_change / portfolio_values[-2]) * 100
-    total_change = portfolio_values[-1] - initial_value
-    total_change_pct = (total_change / initial_value) * 100
-    
-    # Display metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Portfolio Value",
-            f"${current_value:,.2f}",
-            f"{daily_change_pct:+.2f}% today"
+    try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Initialize Alpaca API
+        api_key = os.getenv("APCA_API_KEY_ID")
+        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+        
+        if not api_key or not api_secret:
+            st.error("API credentials not found. Please check your .env file.")
+            st.stop()
+        
+        api = tradeapi.REST(
+            key_id=api_key,
+            secret_key=api_secret,
+            base_url=base_url
         )
-    
-    with col2:
-        st.metric(
-            "Daily P&L",
-            f"${daily_change:,.2f}",
-            f"{daily_change_pct:+.2f}%"
+        
+        # Get account information
+        account = api.get_account()
+        portfolio_value = float(account.portfolio_value)
+        daily_change = float(account.portfolio_value) - float(account.last_equity)
+        daily_change_pct = (daily_change / float(account.last_equity)) * 100 if float(account.last_equity) > 0 else 0
+        
+        # Get positions
+        positions = api.list_positions()
+        total_pl = sum(float(p.unrealized_pl) for p in positions) if positions else 0
+        total_pl_pct = sum(float(p.unrealized_plpc) * 100 for p in positions) / len(positions) if positions else 0
+        
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "Portfolio Value",
+                f"${portfolio_value:,.2f}",
+                f"{daily_change_pct:+.2f}% today"
+            )
+        
+        with col2:
+            st.metric(
+                "Daily P&L",
+                f"${daily_change:,.2f}",
+                f"{daily_change_pct:+.2f}%"
+            )
+        
+        with col3:
+            st.metric(
+                "Total P&L",
+                f"${total_pl:,.2f}",
+                f"{total_pl_pct:+.2f}%"
+            )
+        
+        with col4:
+            buying_power = float(account.buying_power)
+            st.metric(
+                "Buying Power",
+                f"${buying_power:,.2f}",
+                None
+            )
+        
+        # Create performance chart
+        st.subheader("Portfolio Performance")
+        
+        # Time period selector
+        time_period = st.selectbox(
+            "Time Period",
+            ["1W", "2W", "1M", "3M", "YTD", "1Y", "ALL"],
+            index=2  # Default to 1M
         )
+        
+        # Convert time period to days
+        period_days = {
+            "1W": 7,
+            "2W": 14,
+            "1M": 30,
+            "3M": 90,
+            "YTD": (datetime.now() - datetime(datetime.now().year, 1, 1)).days,
+            "1Y": 365,
+            "ALL": 1000  # Maximum days
+        }
+        
+        # Get historical portfolio value
+        end = datetime.now()
+        start = end - timedelta(days=period_days[time_period])
+        
+        try:
+            portfolio_history = api.get_portfolio_history(
+                timeframe="1D",
+                start=start.strftime('%Y-%m-%d'),
+                end=end.strftime('%Y-%m-%d')
+            )
+            
+            # Create DataFrame for plotting
+            df = pd.DataFrame({
+                'timestamp': pd.to_datetime(portfolio_history.timestamp, unit='s'),
+                'equity': portfolio_history.equity
+            })
+            
+            fig = go.Figure()
+            
+            # Add portfolio value line
+            fig.add_trace(
+                go.Scatter(
+                    x=df['timestamp'],
+                    y=df['equity'],
+                    mode='lines',
+                    name='Portfolio Value',
+                    line=dict(color='#00ff00', width=2)
+                )
+            )
+            
+            # Add area for positive returns
+            fig.add_trace(
+                go.Scatter(
+                    x=df['timestamp'],
+                    y=df['equity'],
+                    fill='tonexty',
+                    fillcolor='rgba(0,255,0,0.1)',
+                    line=dict(width=0),
+                    showlegend=False
+                )
+            )
+            
+            # Customize layout
+            fig.update_layout(
+                template='plotly_dark',
+                xaxis_title="Date",
+                yaxis_title="Portfolio Value ($)",
+                height=400,
+                margin=dict(l=0, r=0, t=0, b=0),
+                legend=dict(
+                    yanchor="top",
+                    y=0.99,
+                    xanchor="left",
+                    x=0.01
+                ),
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+        except Exception as e:
+            st.warning(f"Could not load portfolio history: {str(e)}")
+        
+        # Positions table
+        st.subheader("Active Positions")
+        
+        if positions:
+            positions_data = []
+            for position in positions:
+                positions_data.append({
+                    'Symbol': position.symbol,
+                    'Quantity': int(float(position.qty)),
+                    'Entry Price': float(position.avg_entry_price),
+                    'Current Price': float(position.current_price),
+                    'Market Value': float(position.market_value),
+                    'P&L': float(position.unrealized_pl),
+                    'P&L %': float(position.unrealized_plpc) * 100
+                })
+            
+            positions_df = pd.DataFrame(positions_data)
+            
+            # Format the numeric columns
+            for col in ['Entry Price', 'Current Price', 'Market Value', 'P&L']:
+                positions_df[col] = positions_df[col].apply(lambda x: f"${x:,.2f}")
+            positions_df['P&L %'] = positions_df['P&L %'].apply(lambda x: f"{x:+.2f}%")
+            
+            st.dataframe(
+                positions_df,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No active positions")
+        
+        # System status in sidebar
+        st.sidebar.success("✅ Connected to Alpaca Paper Trading")
+        
+        # Add filters in sidebar
+        if positions:
+            st.sidebar.header("Filters")
+            st.sidebar.multiselect(
+                "Symbols",
+                [p.symbol for p in positions],
+                default=[p.symbol for p in positions]
+            )
+            
+            market_values = [float(p.market_value) for p in positions]
+            min_value = min(market_values)
+            max_value = max(market_values)
+            st.sidebar.slider(
+                "Market Value Range",
+                min_value=min_value,
+                max_value=max_value,
+                value=(min_value, max_value)
+            )
     
-    with col3:
-        st.metric(
-            "Total P&L",
-            f"${total_change:,.2f}",
-            f"{total_change_pct:+.2f}%"
-        )
-    
-    with col4:
-        # Calculate 30-day volatility
-        returns = np.diff(portfolio_values) / portfolio_values[:-1]
-        volatility = np.std(returns) * np.sqrt(252) * 100  # Annualized
-        st.metric(
-            "Volatility (Ann.)",
-            f"{volatility:.2f}%",
-            None
-        )
-    
-    # Create performance chart
-    st.subheader("Portfolio Performance")
-    
-    # Time period selector
-    time_period = st.selectbox(
-        "Time Period",
-        ["1W", "2W", "1M", "3M", "YTD", "1Y", "ALL"],
-        index=2  # Default to 1M
-    )
-    
-    fig = go.Figure()
-    
-    # Add portfolio value line
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=portfolio_values,
-            mode='lines',
-            name='Portfolio Value',
-            line=dict(color='#00ff00', width=2)
-        )
-    )
-    
-    # Add area for positive returns
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=portfolio_values,
-            fill='tonexty',
-            fillcolor='rgba(0,255,0,0.1)',
-            line=dict(width=0),
-            showlegend=False
-        )
-    )
-    
-    # Customize layout
-    fig.update_layout(
-        template='plotly_dark',
-        xaxis_title="Date",
-        yaxis_title="Portfolio Value ($)",
-        height=400,
-        margin=dict(l=0, r=0, t=0, b=0),
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        ),
-        hovermode='x unified'
-    )
-    
-    # Add range selector
-    fig.update_xaxes(
-        rangeslider_visible=False,
-        rangeselector=dict(
-            buttons=list([
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=6, label="6m", step="month", stepmode="backward"),
-                dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(count=1, label="1y", step="year", stepmode="backward"),
-                dict(step="all")
-            ])
-        )
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Sample positions table
-    st.subheader("Active Positions")
-    
-    # Generate sample positions data
-    positions_data = {
-        'Symbol': ['AAPL', 'GOOGL', 'TSLA', 'MSFT', 'AMZN'],
-        'Quantity': [100, 50, 200, 150, 75],
-        'Entry Price': [150.25, 2800.50, 750.75, 300.50, 3500.25],
-        'Current Price': [155.50, 2850.25, 760.00, 310.75, 3550.50],
-        'Market Value': [15550.00, 142512.50, 152000.00, 46612.50, 266287.50],
-        'P&L': [525.00, 2487.50, 1850.00, 1537.50, 3768.75],
-        'P&L %': [3.49, 1.78, 1.23, 3.41, 1.44]
-    }
-    
-    positions_df = pd.DataFrame(positions_data)
-    
-    # Format the numeric columns
-    for col in ['Entry Price', 'Current Price', 'Market Value', 'P&L']:
-        positions_df[col] = positions_df[col].apply(lambda x: f"${x:,.2f}")
-    positions_df['P&L %'] = positions_df['P&L %'].apply(lambda x: f"{x:+.2f}%")
-    
-    st.dataframe(
-        positions_df,
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # System status in sidebar
-    st.sidebar.success("✅ System Status: Operational")
-    
-    # Add filters in sidebar
-    st.sidebar.header("Filters")
-    st.sidebar.multiselect(
-        "Symbols",
-        positions_df['Symbol'].tolist(),
-        default=positions_df['Symbol'].tolist()
-    )
-    
-    min_value = 0
-    max_value = 500000
-    st.sidebar.slider(
-        "Market Value Range",
-        min_value=min_value,
-        max_value=max_value,
-        value=(min_value, max_value)
-    )
+    except Exception as e:
+        st.error("An error occurred while running the dashboard:")
+        st.code(str(e))
+        logger.exception("Error in app:")
