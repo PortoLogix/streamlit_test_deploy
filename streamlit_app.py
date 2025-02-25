@@ -56,22 +56,11 @@ if check_password():
     st.title("QuantLogix Dashboard")
     
     try:
-        # Load environment variables
-        load_dotenv()
-        
-        # Initialize Alpaca API
-        api_key = os.getenv("APCA_API_KEY_ID")
-        api_secret = os.getenv("APCA_API_SECRET_KEY")
-        base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-        
-        if not api_key or not api_secret:
-            st.error("API credentials not found. Please check your .env file.")
-            st.stop()
-        
+        # Initialize Alpaca API with direct credentials
         api = tradeapi.REST(
-            key_id=api_key,
-            secret_key=api_secret,
-            base_url=base_url
+            key_id="PKZEZB275Q07VW6SQ08M",
+            secret_key="5KjODvifXKdAGOgvUGRW9AxeOXbIjnjyNlfeZVG6",
+            base_url="https://paper-api.alpaca.markets"
         )
         
         # Get account information
