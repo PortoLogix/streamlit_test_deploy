@@ -35,11 +35,34 @@ def check_password():
         return True
 
 st.set_page_config(
-    page_title="Test App",
-    page_icon="🔥"
+    page_title="QuantLogix",
+    page_icon="📈"
 )
 
 if check_password():
-    st.title("Test Deployment")
-    st.write("This is a test app.")
-    st.success("🎉 You're successfully logged in!")
+    st.title("Welcome to QuantLogix")
+    st.write("Your trusted platform for algorithmic trading and portfolio management.")
+    
+    # Display key features
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("📊 Real-time Portfolio Tracking")
+    
+    with col2:
+        st.info("🤖 Automated Trading")
+    
+    with col3:
+        st.info("📈 Market Analytics")
+    
+    # Add a getting started section
+    st.subheader("Getting Started")
+    st.write("""
+    1. Connect your Alpaca trading account
+    2. Set up your trading preferences
+    3. Monitor your portfolio performance
+    4. Start automated trading
+    """)
+    
+    # Add a status indicator
+    st.sidebar.success("✅ System Status: Operational")
